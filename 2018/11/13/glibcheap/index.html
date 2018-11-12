@@ -1,37 +1,37 @@
 <!DOCTYPE html><html><head><meta name="generator" content="Hexo 3.8.0"><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description" content="This blog is used to record my study process"><title>Note of glibc heap details | Marsman1996's blog</title><link rel="stylesheet" type="text/css" href="/css/normalize.css"><link rel="stylesheet" type="text/css" href="/css/highlight.css"><link rel="stylesheet" type="text/css" href="/css/very-simple.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/font-awesome/4.5.0/css/font-awesome.min.css"><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"></head><body><!-- include the sidebar--><!-- include ./includes/sidebar.jade--><!-- Blog title and subtitle--><header><div class="container header"><a id="logo" href="/." class="title">Marsman1996's blog</a><br><span class="subtitle">一小股火星军, 两小股火星军, 三小股火星军~</span><label id="toggle-menu" for="menu" onclick=""><i class="fa fa-bars"></i></label></div></header><!-- use checkbox hack for toggle nav-bar on small screens--><input id="menu" type="checkbox"><!-- Navigation Links--><nav id="nav"><div class="container"><a href="/" class="sidebar-nav-item active">Home</a><a href="/archives" class="sidebar-nav-item">Archives</a></div></nav><div id="header-margin-bar"></div><!-- gallery that comes before the header--><div class="wrapper"><div class="container post-header"><h1>Note of glibc heap details</h1></div></div><div class="wrapper"><div class="container meta"><div class="post-time">2018-11-13</div><div class="post-categories"><a class="post-category-link" href="/categories/读书笔记/">读书笔记</a></div><div class="post-tags"><a class="post-tag-link" href="/tags/Linux/">Linux</a>/<a class="post-tag-link" href="/tags/heap/">heap</a></div></div></div><article><div class="container post"><p>这篇文章记录glic库中malloc是如何工作的. 主要参考了 <em><a href="https://sploitfun.wordpress.com/2015/02/10/understanding-glibc-malloc/" target="_blank" rel="noopener">Understanding glibc malloc</a></em>  </p>
 <hr>
 <h2 id="目录"><a href="#目录" class="headerlink" title="目录 "></a>目录 <!-- omit in toc --></h2><ul>
-<li><a href="#memory-allocators">Memory Allocators</a></li>
-<li><a href="#syscall">Syscall</a><ul>
+<li><a href="#Memory-Allocators">Memory Allocators</a></li>
+<li><a href="#Syscall">Syscall</a><ul>
 <li><a href="#brk">brk</a></li>
 <li><a href="#mmap">mmap</a></li>
 </ul>
 </li>
-<li><a href="#%E5%86%85%E5%AD%98%E7%BB%93%E6%9E%84">内存结构</a><ul>
-<li><a href="#chunk">Chunk</a><ul>
-<li><a href="#allocated-chunk">Allocated chunk</a></li>
-<li><a href="#free-chunk">Free chunk</a></li>
-<li><a href="#top-chunk">Top Chunk</a></li>
-<li><a href="#last-remainder-chunk">Last Remainder Chunk</a></li>
+<li><a href="#内存结构">内存结构</a><ul>
+<li><a href="#Chunk">Chunk</a><ul>
+<li><a href="#Allocated-Chunk">Allocated chunk</a></li>
+<li><a href="#Free-Chunk">Free chunk</a></li>
+<li><a href="#Top-Chunk">Top Chunk</a></li>
+<li><a href="#Last-Remainder-Chunk">Last Remainder Chunk</a></li>
 </ul>
 </li>
-<li><a href="#bin">Bin</a><ul>
-<li><a href="#fast-bin">Fast bin</a></li>
-<li><a href="#unsorted-bin">Unsorted bin</a></li>
-<li><a href="#small-bin">Small bin</a></li>
-<li><a href="#large-bin">Large bin</a></li>
+<li><a href="#Bin">Bin</a><ul>
+<li><a href="#Fast-Bin">Fast bin</a></li>
+<li><a href="#Unsorted-bin">Unsorted bin</a></li>
+<li><a href="#Small-bin">Small bin</a></li>
+<li><a href="#Large-bin">Large bin</a></li>
 </ul>
 </li>
-<li><a href="#heap">Heap</a></li>
-<li><a href="#arena">Arena</a></li>
+<li><a href="#Heap">Heap</a></li>
+<li><a href="#Arena">Arena</a></li>
 </ul>
 </li>
-<li><a href="#%E5%A0%86%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86">堆内存管理</a><ul>
+<li><a href="#堆内存管理">堆内存管理</a><ul>
 <li><a href="#malloc">malloc()</a></li>
 <li><a href="#free">free()</a></li>
 </ul>
 </li>
-<li><a href="#reference">REFERENCE</a></li>
+<li><a href="#REFERENCE">REFERENCE</a></li>
 </ul>
 <hr>
 <h2 id="Memory-Allocators"><a href="#Memory-Allocators" class="headerlink" title="Memory Allocators"></a>Memory Allocators</h2><p>堆内存分配器主流的有.  </p>
@@ -42,16 +42,16 @@
 <li>tcmalloc – Google 贡献的分配器；</li>
 <li>libumem – Solaris 所用分配器；</li>
 </ul>
-<p><img src="/2018/11/13/glibcheap/allocators.png" width="30%" height="30%">  </p>
+<p><img src="/2018/11/13/glibcheap/allocators.png" alt="allocators history">  </p>
 <p>这篇文章学习glibc库, 代码以glibc-2.28为例</p>
 <h2 id="Syscall"><a href="#Syscall" class="headerlink" title="Syscall"></a>Syscall</h2><p><code>malloc()</code> 按传入参数大小决定调用 <code>brk()</code> 或 <code>mmap()</code> .  </p>
-<p><img src="/2018/11/13/glibcheap/linuxmem.png" width="30%" height="30%">  </p>
-<h3 id="brk"><a href="#brk" class="headerlink" title="brk"></a><a href="http://man7.org/linux/man-pages/man2/sbrk.2.html" title="BRK man-page" target="_blank" rel="noopener">brk</a></h3><p>初始状态堆的起点(start_brk)和堆终点(brk)是指向相同的位置的.<br><code>brk()</code> 通过增加program break location(brk)获得更多内存, 且保留原内存中的数据.  </p>
+<p><img src="/2018/11/13/glibcheap/linuxmem.png" alt="linuxmem"><br><!-- <img src="glibcheap/linuxmem.png" width = 30% height = 30% />   --></p>
+<h3 id="brk"><a href="#brk" class="headerlink" title="brk"></a>brk</h3><p>初始状态堆的起点(start_brk)和堆终点(brk)是指向相同的位置的.<br><a href="http://man7.org/linux/man-pages/man2/sbrk.2.html" title="BRK man-page" target="_blank" rel="noopener"><code>brk()</code></a> 通过增加program break location(brk)获得更多内存, 且保留原内存中的数据.  </p>
 <ul>
 <li>当ASLR关闭时, start_brk和brk将指向data/bss段的结尾.</li>
 <li>当ASLR打开时, start_brk和brk的值将等于data/bss段的结尾加上一个随机的brk偏移.</li>
 </ul>
-<h3 id="mmap"><a href="#mmap" class="headerlink" title="mmap"></a><a href="http://man7.org/linux/man-pages/man2/mmap.2.html" title="MMAP man-page" target="_blank" rel="noopener">mmap</a></h3><p><code>mmap()</code> 在 Memory Mapping Segment 处创建<font color="red">清零后</font>的新内存.</p>
+<h3 id="mmap"><a href="#mmap" class="headerlink" title="mmap"></a>mmap</h3><p><a href="http://man7.org/linux/man-pages/man2/mmap.2.html" title="MMAP man-page" target="_blank" rel="noopener"><code>mmap()</code></a> 在 Memory Mapping Segment 处创建<font color="red">清零后</font>的新内存.</p>
 <h2 id="内存结构"><a href="#内存结构" class="headerlink" title="内存结构"></a>内存结构</h2><p>堆内存管理用到4个数据结构 Arena, Heap, Chunk 和 Bin<br>Arena &gt; Heap &gt; Chunk  </p>
 <h3 id="Chunk"><a href="#Chunk" class="headerlink" title="Chunk"></a>Chunk</h3><p>chunk是堆内存管理的最小单元, 其结构源码如下<br><figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">struct malloc_chunk &#123;</span><br><span class="line">  INTERNAL_SIZE_T      mchunk_prev_size;  /* Size of previous chunk (if free).  */</span><br><span class="line">  INTERNAL_SIZE_T      mchunk_size;       /* Size in bytes, including overhead. */</span><br><span class="line"></span><br><span class="line">  struct malloc_chunk* fd;         /* double links -- used only if free. */</span><br><span class="line">  struct malloc_chunk* bk;</span><br><span class="line"></span><br><span class="line">  /* Only used for large blocks: pointer to next larger size.  */</span><br><span class="line">  struct malloc_chunk* fd_nextsize; /* double links -- used only if free. */</span><br><span class="line">  struct malloc_chunk* bk_nextsize;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure></p>
 <p>存在最小大小限制: <code>#define MIN_CHUNK_SIZE        (offsetof(struct malloc_chunk, fd_nextsize))</code><br>chunk最小为 16 bytes(32位环境)/32 bytes(64位环境)<br>存在对齐要求:  <code>#define MALLOC_ALIGNMENT (2 * SIZE_SZ &lt; __alignof__ (long double) ? __alignof__ (long double) : 2 * SIZE_SZ)</code><br>chunk对齐大小为 8 bytes(32位环境)/16 bytes(64位环境)</p>
@@ -292,7 +292,7 @@ var leancloud_appkey = 'zMPlPQ3u72NBSzC6PxM0cqKq';
 var valine_url = 'http://yoursite.com/2018/11/13/glibcheap/';
 var valine_notify = true;
 var valine_verify = true;
-var valine_placeholder = '吱~ヾﾉ≧∀≦)o';
+var valine_placeholder = '吱一声嘛~ヾﾉ≧∀≦)o';
 new Valine({
          av: AV, // source from av-min.js
          el: '.comment' ,
