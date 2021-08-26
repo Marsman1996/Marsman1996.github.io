@@ -1,0 +1,313 @@
+<!DOCTYPE html><html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description" content="This blog is used to record my study process"><title>Note of Windows Heap Manage | Marsman1996's blog</title><link rel="stylesheet" type="text/css" href="/css/normalize.css"><link rel="stylesheet" type="text/css" href="/css/highlight.css"><link rel="stylesheet" type="text/css" href="/css/very-simple.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/font-awesome/4.5.0/css/font-awesome.min.css"><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><meta name="generator" content="Hexo 5.4.0"></head><body><!-- include the sidebar--><!-- include ./includes/sidebar.jade--><!-- Blog title and subtitle--><header><div class="container header"><a id="logo" href="/." class="title">Marsman1996's blog</a><br><span class="subtitle">一小股火星军, 两小股火星军, 三小股火星军~</span><label id="toggle-menu" for="menu" onclick><i class="fa fa-bars"></i></label></div></header><!-- use checkbox hack for toggle nav-bar on small screens--><input id="menu" type="checkbox"><!-- Navigation Links--><nav id="nav"><div class="container"><a href="/" class="sidebar-nav-item active">Home</a><a href="/archives" class="sidebar-nav-item">Archives</a></div></nav><div id="header-margin-bar"></div><!-- gallery that comes before the header--><div class="wrapper"><div class="container post-header"><h1>Note of Windows Heap Manage</h1></div></div><div class="wrapper"><div class="container meta"><div class="post-time">2018-11-22</div><div class="post-categories"><a class="post-category-link" href="/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记</a></div><div class="post-tags"><a class="post-tag-none-link" href="/tags/Windows/" rel="tag">Windows</a>/<a class="post-tag-none-link" href="/tags/heap/" rel="tag">heap</a></div></div></div><article><div class="container post"><p><em>Windows 8 Heap Internals</em> 发表在 Black Hat 2012 USA, 作者是 Chris Valasek (from Coverity) &amp; Tarjei Mandt (from Azimuth Security). 这篇博文是对其的整理归纳<br>由于对Windows内存管理并不熟悉, 还包括其他关于Windows堆管理的文章<del>看的我头疼</del>   </p>
+<h2 id="目录"><a href="#目录" class="headerlink" title="目录"></a>目录<!-- omit in toc --></h2><ul>
+<li><a href="#%E7%94%A8%E6%88%B7%E7%A9%BA%E9%97%B4">用户空间</a><ul>
+<li><a href="#%E7%94%A8%E6%88%B7%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84">用户数据结构</a><ul>
+<li><a href="#_HEAP(HeapBase)">_HEAP(HeapBase)</a></li>
+<li><a href="#_HEAP_SEGMENT(Heap-%3ESegment)">_HEAP_SEGMENT(Heap-&gt;Segment)</a></li>
+<li><a href="#_HEAP_ENTYR">_HEAP_ENTYR</a></li>
+<li><a href="#_LIST_ENTRY">_LIST_ENTRY</a></li>
+<li><a href="#_LFH_HEAP(Heap-%3EFrontEndHeap)">_LFH_HEAP(Heap-&gt;FrontEndHeap)</a></li>
+</ul>
+</li>
+<li><a href="#%E7%AE%97%E6%B3%95">算法</a><ul>
+<li><a href="#Alloc">Alloc</a></li>
+<li><a href="#Free">Free</a></li>
+</ul>
+</li>
+<li><a href="#%E7%94%A8%E6%88%B7%E5%AE%89%E5%85%A8%E6%9C%BA%E5%88%B6">用户安全机制</a><ul>
+<li><a href="#_HEAP-Handle%E4%BF%9D%E6%8A%A4">_HEAP Handle保护</a></li>
+<li><a href="#%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E9%9A%8F%E6%9C%BA%E5%8C%96">虚拟内存随机化</a></li>
+<li><a href="#%E5%89%8D%E7%AB%AF%E6%BF%80%E6%B4%BB">前端激活</a></li>
+<li><a href="#%E5%89%8D%E7%AB%AF%E5%88%86%E9%85%8D">前端分配</a></li>
+<li><a href="#%E5%BF%AB%E9%80%9F%E5%A4%B1%E8%B4%A5">快速失败</a></li>
+<li><a href="#%E5%AE%88%E6%8A%A4%E9%A1%B5">守护页</a></li>
+<li><a href="#%E4%BB%BB%E6%84%8F%E9%87%8A%E6%94%BE">任意释放</a></li>
+<li><a href="#%E5%BC%82%E5%B8%B8%E5%A4%84%E7%90%86">异常处理</a></li>
+</ul>
+</li>
+<li><a href="#%E5%88%A9%E7%94%A8Exp">利用(Exp)</a><ul>
+<li><a href="#%E4%BD%8D%E5%9B%BE%E7%BF%BB%E8%BD%AC20">位图翻转2.0</a></li>
+<li><a href="#_HEAP_USERDATA_HEADER%E6%94%BB%E5%87%BB">_HEAP_USERDATA_HEADER攻击</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a href="#%E5%86%85%E6%A0%B8%E6%B1%A0Kernel-Pool">内核池(Kernel Pool)</a><ul>
+<li><a href="#%E5%86%85%E6%A0%B8%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84">内核数据结构</a><ul>
+<li><a href="#%E6%B1%A0%E6%8F%8F%E8%BF%B0%E7%AC%A6">池描述符</a></li>
+<li><a href="#%E6%B1%A0chunk%E5%A4%B4%E9%83%A8">池chunk头部</a></li>
+</ul>
+</li>
+<li><a href="#%E5%86%85%E6%A0%B8%E5%AE%89%E5%85%A8%E6%9C%BA%E5%88%B6">内核安全机制</a><ul>
+<li><a href="#%E4%B8%8D%E5%8F%AF%E6%89%A7%E8%A1%8C%E9%9D%9E%E5%88%86%E9%A1%B5%E6%B1%A0NX-Non-Paged-Pool">不可执行非分页池(NX Non-Paged Pool)</a></li>
+<li><a href="#%E5%86%85%E6%A0%B8%E6%B1%A0cookie">内核池Cookie</a></li>
+<li><a href="#%E8%BF%9B%E7%A8%8B%E6%8C%87%E9%92%88%E7%BC%96%E7%A0%81">进程指针编码</a></li>
+<li><a href="#Lookaside-Cookie">Lookaside Cookie</a></li>
+<li><a href="#%E7%BC%93%E5%AD%98%E5%AF%B9%E9%BD%90%E5%88%86%E9%85%8DCookie">缓存对齐分配Cookie</a></li>
+<li><a href="#%E5%AE%89%E5%85%A8%E9%93%BE%E5%85%A5%E9%93%BE%E5%87%BAUnlinking">安全链入链出((Un)linking)</a></li>
+</ul>
+</li>
+<li><a href="#%E6%94%BB%E5%87%BB">攻击</a><ul>
+<li><a href="#%E5%9D%97%E5%B0%BA%E5%AF%B8%E6%94%BB%E5%87%BB">块尺寸攻击</a></li>
+<li><a href="#%E5%88%87%E5%89%B2%E7%A2%8E%E7%89%87%E6%94%BB%E5%87%BB">切割碎片攻击</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a href="#REFERENCE">REFERENCE</a></li>
+</ul>
+<h1 id="用户空间"><a href="#用户空间" class="headerlink" title="用户空间"></a>用户空间</h1><h2 id="用户数据结构"><a href="#用户数据结构" class="headerlink" title="用户数据结构"></a>用户数据结构</h2><ul>
+<li>HEAP<ul>
+<li>HEAP_SEGMENT<ul>
+<li>(_HEAP_ENTYR)Heap_chunk</li>
+</ul>
+</li>
+<li>_LFH_HEAP(Heap-&gt;FrontEndHeap)</li>
+</ul>
+</li>
+</ul>
+<h3 id="HEAP-HeapBase"><a href="#HEAP-HeapBase" class="headerlink" title="_HEAP(HeapBase)"></a>_HEAP(HeapBase)</h3><p>堆, 包括 <strong>进程默认堆</strong> 和 <strong>其他堆</strong>  </p>
+<p><strong>进程默认堆</strong> 是在创建新进程时一起被创建的, 地址存储于 PEB 中的 <code>+0x018 ProcessHeap</code><br><strong>其他堆</strong> 是调用<code>HeapCreate()</code>创建的  </p>
+<!-- 我们在 Windows10 下使用 WinDBG 打开 Thunder.exe 查看其 PEB (以后也是以 Win10 下 迅雷 为例)   -->
+
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">0:051&gt; dt _PEB 008b9000</span><br><span class="line">ntdll!_PEB</span><br><span class="line">...</span><br><span class="line">    +0x018 ProcessHeap                      : 0x00ce0000 Void</span><br><span class="line">...</span><br><span class="line">    +0x078 HeapSegmentReserve               : 0x100000</span><br><span class="line">    +0x07c HeapSegmentCommit                : 0x2000</span><br><span class="line">    +0x080 HeapDeCommitTotalFreeThreshold   : 0x10000</span><br><span class="line">    +0x084 HeapDeCommitFreeBlockThreshold   : 0x1000</span><br><span class="line">    +0x088 NumberOfHeaps                    : 3 //堆的总数</span><br><span class="line">    +0x08c MaximumNumberOfHeaps             : 0x10</span><br><span class="line">    +0x090 ProcessHeaps                     : 0x7755f6a0  -&gt; 0x00ce0000 Void //是一个数组, 用来记录每个堆的句柄</span><br><span class="line">...</span><br><span class="line">    +0x240 HeapTracingEnabled               : 0y0</span><br><span class="line">...</span><br></pre></td></tr></table></figure>
+
+<p><code>+0x088 NumberOfHeaps</code>是堆的总数, <code>+0x090 ProcessHeaps</code>是一个数组, 用来记录每个堆的句柄.<br>它们没有本质区别: 结构都一样, 本质上都是通过<code>RtlHeapCreate()</code>创建<br>堆结构如下:  </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br></pre></td><td class="code"><pre><span class="line">0:049&gt; dt _HEAP 0x00ce0000</span><br><span class="line">ntdll!_HEAP</span><br><span class="line">    +0x000 Segment                          : _HEAP_SEGMENT</span><br><span class="line">    +0x000 Entry                            : _HEAP_ENTRY</span><br><span class="line">    +0x008 SegmentSignature                 : 0xffeeffee</span><br><span class="line">    +0x00c SegmentFlags                     : 2</span><br><span class="line">    +0x010 SegmentListEntry                 : _LIST_ENTRY [ 0xce00a4 - 0xce00a4 ]</span><br><span class="line">    +0x018 Heap                             : 0x00ce0000 _HEAP</span><br><span class="line">    +0x01c BaseAddress                      : 0x00ce0000 Void</span><br><span class="line">    +0x020 NumberOfPages                    : 0xff</span><br><span class="line">    +0x024 FirstEntry                       : 0x00ce04a8 _HEAP_ENTRY</span><br><span class="line">    +0x028 LastValidEntry                   : 0x00ddf000 _HEAP_ENTRY</span><br><span class="line">    +0x02c NumberOfUnCommittedPages         : 0xe1</span><br><span class="line">    +0x030 NumberOfUnCommittedRanges        : 1</span><br><span class="line">    +0x034 SegmentAllocatorBackTraceIndex   : 0</span><br><span class="line">    +0x036 Reserved                         : 0</span><br><span class="line">    +0x038 UCRSegmentList                   : _LIST_ENTRY [ 0xcfdff0 - 0xcfdff0 ]</span><br><span class="line"></span><br><span class="line">    +0x040 Flags                            : 2</span><br><span class="line">    +0x044 ForceFlags                       : 0</span><br><span class="line">    +0x048 CompatibilityFlags               : 0</span><br><span class="line">    +0x04c EncodeFlagMask                   : 0x100000      //这两个是对HEAP_ENTRY的加密</span><br><span class="line">    +0x050 Encoding                         : _HEAP_ENTRY   //异或算法的加密密钥</span><br><span class="line">    +0x058 Interceptor                      : 0</span><br><span class="line">    +0x05c VirtualMemoryThreshold           : 0xfe00 //VirtualMemory的阈值,大于该值会直接从内存管理器中分配, 并不会从从空闲链表申请</span><br><span class="line">    +0x060 Signature                        : 0xeeffeeff</span><br><span class="line">    +0x064 SegmentReserve                   : 0x200000</span><br><span class="line">    +0x068 SegmentCommit                    : 0x2000</span><br><span class="line">    +0x06c DeCommitFreeBlockThreshold       : 0x200</span><br><span class="line">    +0x070 DeCommitTotalFreeThreshold       : 0x2000</span><br><span class="line">    +0x074 TotalFreeSize                    : 0x2ae</span><br><span class="line">    +0x078 MaximumAllocationSize            : 0x7ffdefff</span><br><span class="line">    +0x07c ProcessHeapsListIndex            : 1 //本堆在进程堆列表中的索引</span><br><span class="line">    +0x07e HeaderValidateLength             : 0x258</span><br><span class="line">    +0x080 HeaderValidateCopy               : (null) </span><br><span class="line">    +0x084 NextAvailableTagIndex            : 0 </span><br><span class="line">    +0x086 MaximumTagIndex                  : 0</span><br><span class="line">    +0x088 TagEntries                       : (null) </span><br><span class="line">    +0x08c UCRList                          : _LIST_ENTRY [ 0xcfdfe8 - 0xcfdfe8 ]</span><br><span class="line">    +0x094 AlignRound                       : 0xf</span><br><span class="line">    +0x098 AlignMask                        : 0xfffffff8</span><br><span class="line">    +0x09c VirtualAllocdBlocks              : _LIST_ENTRY [ 0xce009c - 0xce009c ] //链表, 所有大于VirtualMemoryThreshold直接从内存管理器申请的空间</span><br><span class="line">    +0x0a4 SegmentList                      : _LIST_ENTRY [ 0xce0010 - 0xce0010 ] //段链表HEAP_SEGMENT</span><br><span class="line">    +0x0ac AllocatorBackTraceIndex          : 0</span><br><span class="line">    +0x0b0 NonDedicatedListLength           : 0</span><br><span class="line">    +0x0b4 BlocksIndex                      : 0x00ce0270 Void //用于跟踪某一尺寸的空闲chunk</span><br><span class="line">    +0x0b8 UCRIndex                         : (null) </span><br><span class="line">    +0x0bc PseudoTagEntries                 : (null) </span><br><span class="line">    +0x0c0 FreeLists                        : _LIST_ENTRY [ 0xce3698 - 0xcfd7b8 ] //空闲块双向链表, 由小到大排序</span><br><span class="line">    +0x0c8 LockVariable                     : 0x00ce0258 _HEAP_LOCK</span><br><span class="line">    +0x0cc CommitRoutine                    : 0x03a9d62e     long  +3a9d62e</span><br><span class="line">    +0x0d0 StackTraceInitVar                : _RTL_RUN_ONCE</span><br><span class="line">    +0x0d4 CommitLimitData                  : _RTL_HEAP_MEMORY_LIMIT_DATA</span><br><span class="line">    +0x0e4 FrontEndHeap                     : 0x00690000 Void //指向前端堆结构的指针. 在Windows 8中, LFH是唯一的可选项</span><br><span class="line">    +0x0e8 FrontHeapLockCount               : 0</span><br><span class="line">    +0x0ea FrontEndHeapType                 : 0x2 &#x27;&#x27;</span><br><span class="line">    +0x0eb RequestedFrontEndHeapType        : 0x2 &#x27;&#x27;</span><br><span class="line">    +0x0ec FrontEndHeapUsageData            : 0x00ce9fb8  &quot;&quot; //用于表示计数器或是HeapBucket的索引, </span><br><span class="line">    +0x0f0 FrontEndHeapMaximumIndex         : 0x802 </span><br><span class="line">    +0x0f2 FrontEndHeapStatusBitmap         : [257]  &quot;&quot; //用于优化的位图，当处理内存请求时可以用于判断是由后端还是前端堆管理器来处理.</span><br><span class="line">    +0x1f4 Counters                         : _HEAP_COUNTERS</span><br><span class="line">    +0x250 TuningParameters                 : _HEAP_TUNING_PARAMETERS</span><br></pre></td></tr></table></figure>
+
+<h3 id="HEAP-SEGMENT-Heap-gt-Segment"><a href="#HEAP-SEGMENT-Heap-gt-Segment" class="headerlink" title="_HEAP_SEGMENT(Heap-&gt;Segment)"></a>_HEAP_SEGMENT(Heap-&gt;Segment)</h3><p>堆段  </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">0:049&gt; dt _HEAP_SEGMENT 0x00ce0000</span><br><span class="line">ntdll!_HEAP_SEGMENT</span><br><span class="line">    +0x000 Entry                            : _HEAP_ENTRY</span><br><span class="line">    +0x008 SegmentSignature                 : 0xffeeffee</span><br><span class="line">    +0x00c SegmentFlags                     : 2</span><br><span class="line">    +0x010 SegmentListEntry                 : _LIST_ENTRY [ 0xce00a4 - 0xce00a4 ]</span><br><span class="line">    +0x018 Heap                             : 0x00ce0000 _HEAP //所属的堆的_HEAP结构的首地址</span><br><span class="line">    +0x01c BaseAddress                      : 0x00ce0000 Void //堆段的基地址</span><br><span class="line">    +0x020 NumberOfPages                    : 0xff</span><br><span class="line">    +0x024 FirstEntry                       : 0x00ce04a8 _HEAP_ENTRY //该段中第一个堆块的地址</span><br><span class="line">    +0x028 LastValidEntry                   : 0x00ddf000 _HEAP_ENTRY</span><br><span class="line">    +0x02c NumberOfUnCommittedPages         : 0xe1</span><br><span class="line">    +0x030 NumberOfUnCommittedRanges        : 1</span><br><span class="line">    +0x034 SegmentAllocatorBackTraceIndex   : 0</span><br><span class="line">    +0x036 Reserved                         : 0</span><br><span class="line">    +0x038 UCRSegmentList                   : _LIST_ENTRY [ 0xcfdff0 - 0xcfdff0 ]</span><br></pre></td></tr></table></figure>
+
+<h3 id="HEAP-ENTYR"><a href="#HEAP-ENTYR" class="headerlink" title="_HEAP_ENTYR"></a>_HEAP_ENTYR</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">0:000&gt; dt _HEAP_ENTRY 02d604a8</span><br><span class="line">ntdll!_HEAP_ENTRY</span><br><span class="line">    +0x000 UnpackedEntry    : _HEAP_UNPACKED_ENTRY</span><br><span class="line">    +0x000 Size             : 0x3ccb</span><br><span class="line">    +0x002 Flags            : 0x13 &#x27;&#x27;</span><br><span class="line">    +0x003 SmallTagIndex    : 0x15 &#x27;&#x27;</span><br><span class="line">    +0x000 SubSegmentCode   : 0x15133ccb</span><br><span class="line">    +0x004 PreviousSize     : 0x8c41</span><br><span class="line">    +0x006 SegmentOffset    : 0 &#x27;&#x27;</span><br><span class="line">    +0x006 LFHFlags         : 0 &#x27;&#x27;</span><br><span class="line">    +0x007 UnusedBytes      : 0 &#x27;&#x27;</span><br><span class="line"></span><br><span class="line">    +0x000 ExtendedEntry    : _HEAP_EXTENDED_ENTRY</span><br><span class="line">    +0x000 FunctionIndex    : 0x3ccb</span><br><span class="line">    +0x002 ContextValue     : 0x1513</span><br><span class="line">    +0x000 InterceptorValue : 0x15133ccb</span><br><span class="line">    +0x004 UnusedBytesLength : 0x8c41</span><br><span class="line">    +0x006 EntryOffset      : 0 &#x27;&#x27;</span><br><span class="line">    +0x007 ExtendedBlockSignature : 0 &#x27;&#x27;</span><br><span class="line"></span><br><span class="line">    +0x000 Code1            : 0x15133ccb</span><br><span class="line">    +0x004 Code2            : 0x8c41</span><br><span class="line">    +0x006 Code3            : 0 &#x27;&#x27;</span><br><span class="line">    +0x007 Code4            : 0 &#x27;&#x27;</span><br><span class="line">    +0x004 Code234          : 0x8c41</span><br><span class="line">    +0x000 AgregateCode     : 0x00008c41`15133ccb</span><br></pre></td></tr></table></figure>
+
+<p>这和我们使用<code>!heap -a 02d604a8</code>得到的<code>02d604a8: psize: 004a8 . size: 00010 flags:[100]</code>不太一样, 这是由于加密的缘故  </p>
+<h3 id="LIST-ENTRY"><a href="#LIST-ENTRY" class="headerlink" title="_LIST_ENTRY"></a>_LIST_ENTRY</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">0:000&gt; dt _LIST_ENTRY 02d604a8</span><br><span class="line">ntdll!_LIST_ENTRY</span><br><span class="line">[ 0x7d7c1155 - 0x9ac5 ]</span><br><span class="line">    +0x000 Flink            : 0x7d7c1155 _LIST_ENTRY</span><br><span class="line">    +0x004 Blink            : 0x00009ac5 _LIST_ENTRY</span><br></pre></td></tr></table></figure>
+
+<h3 id="LFH-HEAP-Heap-gt-FrontEndHeap"><a href="#LFH-HEAP-Heap-gt-FrontEndHeap" class="headerlink" title="_LFH_HEAP(Heap-&gt;FrontEndHeap)"></a>_LFH_HEAP(Heap-&gt;FrontEndHeap)</h3><p>_LFH_HEAP 全称为 LowFragmentHeap/低碎片堆, </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">0:051&gt; dt _LFH_HEAP</span><br><span class="line">ntdll!_LFH_HEAP</span><br><span class="line">    +0x000 Lock                         : _RTL_SRWLOCK</span><br><span class="line">    +0x004 SubSegmentZones              : _LIST_ENTRY</span><br><span class="line">    +0x00c Heap                         : Ptr32 Void</span><br><span class="line">    +0x010 NextSegmentInfoArrayAddress  : Ptr32 Void</span><br><span class="line">    +0x014 FirstUncommittedAddress      : Ptr32 Void</span><br><span class="line">    +0x018 ReservedAddressLimit         : Ptr32 Void</span><br><span class="line">    +0x01c SegmentCreate                : Uint4B</span><br><span class="line">    +0x020 SegmentDelete                : Uint4B</span><br><span class="line">    +0x024 MinimumCacheDepth            : Uint4B</span><br><span class="line">    +0x028 CacheShiftThreshold          : Uint4B</span><br><span class="line">    +0x02c SizeInCache                  : Uint4B</span><br><span class="line">    +0x030 RunInfo                      : _HEAP_BUCKET_RUN_INFO</span><br><span class="line">    +0x038 UserBlockCache               : [12] _USER_MEMORY_CACHE_ENTRY</span><br><span class="line">    +0x1b8 MemoryPolicies               : _HEAP_LFH_MEM_POLICIES</span><br><span class="line">    +0x1bc Buckets                      : [129] _HEAP_BUCKET</span><br><span class="line">    +0x3c0 SegmentInfoArrays            : [129] Ptr32 _HEAP_LOCAL_SEGMENT_INFO</span><br><span class="line">    +0x5c4 AffinitizedInfoArrays        : [129] Ptr32 _HEAP_LOCAL_SEGMENT_INFO</span><br><span class="line">    +0x7c8 SegmentAllocator             : Ptr32 _SEGMENT_HEAP</span><br><span class="line">    +0x7d0 LocalData                    : [1] _HEAP_LOCAL_DATA</span><br></pre></td></tr></table></figure>
+
+<p>它将可用空间分为128个Buckets, 编号1-128. 每个Buckets大小依次递增: 第一个Bucket大小8byte, 128号Bucket大小16384byte. 当需要从低碎片前端分配器上分配空间时, 堆管理器会将满足要求的最小的Bucket分配出去.  </p>
+<table>
+<thead>
+<tr>
+<th>No.</th>
+<th>Granularity</th>
+<th>Range</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1~32</td>
+<td>8</td>
+<td>1~256</td>
+</tr>
+<tr>
+<td>33~48</td>
+<td>16</td>
+<td>257~512</td>
+</tr>
+<tr>
+<td>49~64</td>
+<td>32</td>
+<td>513~1024</td>
+</tr>
+<tr>
+<td>65~80</td>
+<td>64</td>
+<td>1025~2048</td>
+</tr>
+<tr>
+<td>81~96</td>
+<td>128</td>
+<td>2049~4096</td>
+</tr>
+<tr>
+<td>97~112</td>
+<td>256</td>
+<td>4097~8192</td>
+</tr>
+<tr>
+<td>113~128</td>
+<td>512</td>
+<td>8193~16384</td>
+</tr>
+</tbody></table>
+<h3 id="HEAP-SUBSEGMENT-Heap‐-gt-LFH‐-gt-InfoArrays-‐-gt-ActiveSubsegment"><a href="#HEAP-SUBSEGMENT-Heap‐-gt-LFH‐-gt-InfoArrays-‐-gt-ActiveSubsegment" class="headerlink" title="_HEAP_SUBSEGMENT (Heap‐&gt;LFH‐&gt;InfoArrays[]‐&gt;ActiveSubsegment)"></a>_HEAP_SUBSEGMENT (Heap‐&gt;LFH‐&gt;InfoArrays[]‐&gt;ActiveSubsegment)</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">0:001&gt; dt _HEAP_SUBSEGMENT</span><br><span class="line">ntdll!_HEAP_SUBSEGMENT</span><br><span class="line">+0x000 LocalInfo        : Ptr32 _HEAP_LOCAL_SEGMENT_INFO</span><br><span class="line">+0x004 UserBlocks       : Ptr32 _HEAP_USERDATA_HEADER</span><br><span class="line">+0x008 DelayFreeList    : _SLIST_HEADER</span><br><span class="line">+0x010 AggregateExchg   : _INTERLOCK_SEQ</span><br><span class="line">+0x014 BlockSize        : Uint2B</span><br><span class="line">+0x016 Flags            : Uint2B</span><br><span class="line">+0x018 BlockCount       : Uint2B</span><br><span class="line">+0x01a SizeIndex        : UChar</span><br><span class="line">+0x01b AffinityIndex    : UChar</span><br><span class="line">+0x014 Alignment        : [2] Uint4B</span><br><span class="line">+0x01c SFreeListEntry   : _SINGLE_LIST_ENTRY</span><br><span class="line">+0x020 Lock             : Uint4B</span><br></pre></td></tr></table></figure>
+
+<h3 id="HEAP-USERDATA-HEADER-Heap‐-gt-LFH‐-gt-InfoArrays-‐-gt-ActiveSubsegment‐-gt-UserBlocks"><a href="#HEAP-USERDATA-HEADER-Heap‐-gt-LFH‐-gt-InfoArrays-‐-gt-ActiveSubsegment‐-gt-UserBlocks" class="headerlink" title="_HEAP_USERDATA_HEADER (Heap‐&gt;LFH‐&gt;InfoArrays[]‐&gt;ActiveSubsegment‐&gt;UserBlocks)"></a>_HEAP_USERDATA_HEADER (Heap‐&gt;LFH‐&gt;InfoArrays[]‐&gt;ActiveSubsegment‐&gt;UserBlocks)</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">0:001&gt; dt _HEAP_USERDATA_HEADER</span><br><span class="line">ntdll!_HEAP_USERDATA_HEADER</span><br><span class="line">+0x000 SFreeListEntry           : _SINGLE_LIST_ENTRY</span><br><span class="line">+0x000 SubSegment               : Ptr32 _HEAP_SUBSEGMENT</span><br><span class="line">+0x004 Reserved                 : Ptr32 Void</span><br><span class="line">+0x008 SizeIndexAndPadding      : Uint4B</span><br><span class="line">+0x008 SizeIndex                : UChar</span><br><span class="line">+0x009 GuardPagePresent         : UChar</span><br><span class="line">+0x00a PaddingBytes             : Uint2B</span><br><span class="line">+0x00c Signature                : Uint4B</span><br><span class="line">+0x010 FirstAllocationOffset    : Uint2B</span><br><span class="line">+0x012 BlockStride              : Uint2B</span><br><span class="line">+0x014 BusyBitmap               : _RTL_BITMAP</span><br><span class="line">+0x01c BitmapData               : [1] Uint4B</span><br></pre></td></tr></table></figure>
+
+<p>总结一下:<br>之后补图</p>
+<h2 id="算法"><a href="#算法" class="headerlink" title="算法"></a>算法</h2><!-- ![heapmanage](win8heap/win8heapmanage.png) -->
+<!-- <img src="glibcheap/allocators.png" width = 30% height = 30% />   -->
+<h3 id="Alloc"><a href="#Alloc" class="headerlink" title="Alloc"></a>Alloc</h3><ul>
+<li>Intermediate: <code>void *RtlAllocateHeap(_HEAP *Heap, DWORD Flags, size_t Size)</code><ol>
+<li>检查<ul>
+<li>检查<code>Size</code>, 大于2G时分配失败; </li>
+<li>确保最小大小为16字节并8字节对齐<code>int RoundSize = (Size + 15) &amp; 0xFFFFFF8;</code>;</li>
+<li><code>int BlockSize = RoundedSize / 8;</code></li>
+</ul>
+</li>
+<li>当<code>Size &gt; 0x4000</code>(16KB)时使用后端堆分配, 根据<code>Size</code>确定使用哪种<code>ListHint</code></li>
+<li>当<code>Size &lt;= 0x4000</code>时查看<code>RoundSize</code>大小的前端堆是否被激活并尝试LFH分配<ul>
+<li>若未激活或分配失败则继续尝试后端堆分配</li>
+</ul>
+</li>
+</ol>
+</li>
+<li>BackEnd: <code>void *__fastcall RtlpAllocateHeap(_HEAP *Heap, int Flags, int Size, unsigned int RoundedSize, _LIST_ENTRY *ListHint, int *RetCode)</code><ol>
+<li>检查<ul>
+<li>再次检查<code>RoundedSize</code>确保至少有16字节; </li>
+<li><code>Size</code>大于2G时分配失败</li>
+<li>当<code>Heap‐&gt;CompatibilityFlags &amp; 0x30000000</code>时激活LFH</li>
+</ul>
+</li>
+<li>若<code>BlockSize</code>比<code>Heap+0x05c VirtualMemoryThreshold</code>大, 使用虚分配</li>
+<li><code>Size &lt; 0x4000</code>(16KB)时若LFH未激活则设置对应大小的计数器加0x21<code>Heap-&gt;FrontEndHeapUsageData[BlockSize] + 0x21</code> <ul>
+<li>当该大小的计数器<code>(Count &amp; 0x1F) &gt; 0x10 || Count &gt; 0xFF00</code>(即16次连续分配或许多次非连续分配)时<ul>
+<li>如果LFH是激活的更新堆bucket索引<code>Heap‐&gt;FrontEndHeapUsageData[BlockSize] = BucketIndex</code>与位图的对应位<code>Heap‐&gt;FrontEndHeapStatusBitmap[BitmapIndex] |= 1 &lt;&lt; BitPos</code></li>
+<li>设置激活LFH<code>Heap‐&gt;CompatibilityFlags |= 0x20000000;</code>这样下次分配时可以使用LFH</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>从<code>FreeList</code>中分配 chunk<ul>
+<li>从如果<code>ListHint</code>中有空 chunk, 直接分配</li>
+<li>从<code>FreeList</code>中查找大于请求大小的的 chunk</li>
+<li>没有合适大小的 chunk 就需要<code>RtlpExtendHeap()</code>扩展堆</li>
+<li>上面都不行就报错啦</li>
+</ul>
+</li>
+<li>双向链表安全检查: <code>Blink‐&gt;Flink != Flink‐&gt;Blink || Blink‐&gt;Flink != ListHint</code></li>
+</ol>
+</li>
+<li>FrontEnd: <code>void *RtlpLowFragHeapAllocFromContext(_LFH_HEAP *LFH, unsigned short BucketIndex, int Size, char Flags)</code><br>  可以将前端分配器比作一个快表, 它的存在就是为了加快分配速度, <del>Win8唯一指定</del>前端分配器:LFH<ol>
+<li>检查亲和性(affinity)<ul>
+<li>标记 affinity 则初始化所有相关变量</li>
+<li>根据 affinity 决定从<code>AffinitizedInfoArrays</code>或<code>SegmentInfoArrays</code>取<code>LocalSegInfo</code></li>
+</ul>
+</li>
+<li>从<code>LocalSegInfo</code>通过<code>ActiveSubSeg</code>获取<code>UserBlocks</code><ul>
+<li>能够获取: 从<code>UserBlocks</code>中搜索free chunk<ul>
+<li>为了增加随机性, 随机偏移作为起点搜索, 而不是从头开始搜索</li>
+<li>对头部进行检查防止返回一个被污染的chunk</li>
+</ul>
+</li>
+<li>不能获取: 检查<code>Subsegment</code>缓存并创建一个新的<code>UserBlocks</code><ul>
+<li>守护页</li>
+</ul>
+</li>
+</ul>
+</li>
+</ol>
+</li>
+</ul>
+<h3 id="Free"><a href="#Free" class="headerlink" title="Free"></a>Free</h3><ul>
+<li>Intermediate: <code>RtlFreeHeap(_HEAP *Heap, int Flags, void *Mem)</code><ol>
+<li>检查<ul>
+<li><code>*Mem</code>为空?</li>
+<li><code>ForceFlags &amp; 0x1000000</code>强制使用后端管理器</li>
+<li><code>*Mem</code>8字节对齐?<code>if(Mem &amp; 7)</code></li>
+<li><code>SegmentOffset</code></li>
+</ul>
+</li>
+<li>解码<code>UnusedBytes</code><ul>
+<li><code>Header‐&gt;UnusedBytes &amp; 0x80</code>(最高位为1)则前端堆释放</li>
+<li>否则后端堆释放</li>
+</ul>
+</li>
+</ol>
+</li>
+<li>BackEnd: <code>RtlpFreeHeap(_HEAP *Heap, int Flags, _HEAP_ENTRY *Header, void *Chunk)</code><ol>
+<li>检查<ul>
+<li>chunk_head是否指向与heap相同的地址: <code>if(Heap == Header)</code>, 是就报错</li>
+<li>解码校验<code>DecodeValidateHeader(Header, Heap)</code>, 解码出错则中止</li>
+<li>当<code>Header‐&gt;UnusedBytes == 0x4</code>时虚释放: <code>VirtualFree(Head, Header);</code></li>
+</ul>
+</li>
+<li>遍历搜索合适尺寸的<code>BlocksIndex</code></li>
+<li>更新<code>FrontEndHeapUsageData</code>减小计数器的值: <code>Heap‐&gt;FrontEndHeapUsageData[Size]‐‐;</code></li>
+<li>合并物理相邻的 free chunks <ul>
+<li>decommit</li>
+<li>virtual</li>
+</ul>
+</li>
+<li>按大小将 chunk 插入<code>FreeList</code>, <ul>
+<li>安全检查: <code>InsertPoint‐&gt;Blink-&gt;Flink == InsertPoint</code></li>
+</ul>
+</li>
+</ol>
+</li>
+<li>FrontEnd: <code>RtlpLowFragHeapFree(_HEAP *Heap, _HEAP_ENTRY *Header)</code><ol>
+<li>找到待释放chunk所属的<code>Subsegment</code>和<code>UserBlocks</code></li>
+<li>更新位图<code>BusyBitmap</code></li>
+<li>释放<code>DelayFreeList</code></li>
+<li>检查<code>UserBlocks</code>中是否存在 BUSY chunk<ul>
+<li>存在: 只更新<code>Subsegment</code></li>
+<li>不存在: <code>Subsegment</code>加入到缓存中, UserBlocks起始的下一个页对齐地址应该具有不可执行权限, 释放<code>UserBlocks</code></li>
+</ul>
+</li>
+</ol>
+</li>
+</ul>
+<h2 id="用户安全机制"><a href="#用户安全机制" class="headerlink" title="用户安全机制"></a>用户安全机制</h2><p>Windows 8预览版新增的安全机制</p>
+<h3 id="HEAP-Handle保护"><a href="#HEAP-Handle保护" class="headerlink" title="_HEAP Handle保护"></a>_HEAP Handle保护</h3><p>free时检查被释放的chunk地址!=heap地址</p>
+<h3 id="虚拟内存随机化"><a href="#虚拟内存随机化" class="headerlink" title="虚拟内存随机化"></a>虚拟内存随机化</h3><p>虚分配的地址增加了随机数</p>
+<h3 id="前端激活"><a href="#前端激活" class="headerlink" title="前端激活"></a>前端激活</h3><p><code>FrontEndHeapUsageData</code> 和 <code>FrontEndHeapStatusBitmap</code></p>
+<h3 id="前端分配"><a href="#前端分配" class="headerlink" title="前端分配"></a>前端分配</h3><p>位图 和 随机偏移</p>
+<h3 id="快速失败"><a href="#快速失败" class="headerlink" title="快速失败"></a>快速失败</h3><p><code>int 0x29</code></p>
+<h3 id="守护页"><a href="#守护页" class="headerlink" title="守护页"></a>守护页</h3><p><code>UserBlocks</code>间插入的守护页, 类似REDZONE</p>
+<h3 id="任意释放"><a href="#任意释放" class="headerlink" title="任意释放"></a>任意释放</h3><p>Free时若<code>Header‐&gt;UnusedBytes</code>为特定值, 则根据<code>SegmentOffset</code>值调整chunk头指向新位置. 通过修改<code>SegmentOffset</code>的值可以令chunk指向任意位置</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">if(Header‐&gt;UnusedBytes == 0x5)</span><br><span class="line">    Header ‐= 8 * Header‐&gt;SegmentOffset;</span><br></pre></td></tr></table></figure>
+
+<p>所以新引入对原先chunk头的校验, 发现原先chunk头被修改则报错</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line">//查看原始头，而不是被调整过的</span><br><span class="line">bool valid_chunk = false;</span><br><span class="line">if(HeaderOrig‐&gt;UnusedBytes == 0x5)</span><br><span class="line">&#123;</span><br><span class="line">    //look at adjusted header to determine if in the LFH</span><br><span class="line">    //查看调整过的头来判断是否在LFH中  </span><br><span class="line">    if(Header‐&gt;UnusedBytes &amp; 0x80)</span><br><span class="line">    &#123;</span><br><span class="line">        //RIP Ben Hawkes SegmentOffset attack :(</span><br><span class="line">        //Ben Hawkes SegmentOffset攻击的消亡 :(  </span><br><span class="line">        valid_chunk = RtlpValidateLFHBlock(Heap, Header);</span><br><span class="line">    &#125;</span><br><span class="line">    else</span><br><span class="line">    &#123;</span><br><span class="line">        if(Heap‐&gt;EncodeFlagMask)</span><br><span class="line">        &#123;</span><br><span class="line">            if(!DecodeValidateHeader(Heap, Header))</span><br><span class="line">                RtlpLogHeapFailure(3, Heap, Header, Mem, 0, 0);    </span><br><span class="line">            else</span><br><span class="line">                valid_chunk = true;    </span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    //if it’s found that this is a tainted chunk, return ERROR</span><br><span class="line">    //如果发现chunk被污染了，就返回ERROR  </span><br><span class="line">    if(!valid_chunk)</span><br><span class="line">        return ERROR_BAD_CHUNK;    </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="异常处理"><a href="#异常处理" class="headerlink" title="异常处理"></a>异常处理</h3><p>win7中LFH过程中发生任何错误都会被try-catch捕获然后return 0转由后端处理<br>win8移除了这一异常处理</p>
+<h2 id="利用-Exp"><a href="#利用-Exp" class="headerlink" title="利用(Exp)"></a>利用(Exp)</h2><h3 id="位图翻转2-0"><a href="#位图翻转2-0" class="headerlink" title="位图翻转2.0"></a>位图翻转2.0</h3><h3 id="HEAP-USERDATA-HEADER攻击"><a href="#HEAP-USERDATA-HEADER攻击" class="headerlink" title="_HEAP_USERDATA_HEADER攻击"></a>_HEAP_USERDATA_HEADER攻击</h3><h1 id="内核池-Kernel-Pool"><a href="#内核池-Kernel-Pool" class="headerlink" title="内核池(Kernel Pool)"></a>内核池(Kernel Pool)</h1><p>Windows内核以及第三方驱动通常都会从内核池分配器中分配内存<br>为了以最快最有效的方式服务分配请求, 分配器使用可以检索碎片和池内存的多个链表</p>
+<h2 id="内核数据结构"><a href="#内核数据结构" class="headerlink" title="内核数据结构"></a>内核数据结构</h2><h3 id="池描述符"><a href="#池描述符" class="headerlink" title="池描述符"></a>池描述符</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">kd&gt; dt nt!_POOL_DESCRIPTOR</span><br><span class="line">    +0x000 PoolType                     : _POOL_TYPE //分页池和非分页池</span><br><span class="line">    +0x008 PagedLock                    : _FAST_MUTEX</span><br><span class="line">    +0x008 NonPagedLock                 : Uint8B</span><br><span class="line">    +0x040 RunningAllocs                : Int4B</span><br><span class="line">    +0x044 RunningDeAllocs              : Int4B</span><br><span class="line">    +0x048 TotalBigPages                : Int4B</span><br><span class="line">    +0x04c ThreadsProcessingDeferrals   : Int4B</span><br><span class="line">    +0x050 TotalBytes                   : Uint8B</span><br><span class="line">    +0x080 PoolIndex                    : Uint4B</span><br><span class="line">    +0x0c0 TotalPages                   : Int4B</span><br><span class="line">    +0x100 PendingFrees                 : _SINGLE_LIST_ENTRY</span><br><span class="line">    +0x108 PendingFreeDepth             : Int4B</span><br><span class="line">    +0x140 ListHeads                    : [256] _LIST_ENTRY</span><br></pre></td></tr></table></figure>
+
+<p>_POOL_TYPE 有</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">kd&gt; dt nt!_POOL_TYPE</span><br><span class="line">    NonPagedPool = 0n0</span><br><span class="line">    NonPagedPoolExecute = 0n0</span><br><span class="line">    PagedPool = 0n1</span><br><span class="line">    NonPagedPoolMustSucceed = 0n2</span><br><span class="line">    DontUseThisType = 0n3</span><br><span class="line">    NonPagedPoolCacheAligned = 0n4</span><br><span class="line">    PagedPoolCacheAligned = 0n5</span><br><span class="line">    NonPagedPoolCacheAlignedMustS = 0n6</span><br><span class="line">    MaxPoolType = 0n7</span><br><span class="line">    NonPagedPoolBase = 0n0</span><br><span class="line">    NonPagedPoolBaseMustSucceed = 0n2</span><br><span class="line">    NonPagedPoolBaseCacheAligned = 0n4</span><br><span class="line">    NonPagedPoolBaseCacheAlignedMustS = 0n6</span><br><span class="line">    NonPagedPoolSession = 0n32</span><br><span class="line">    PagedPoolSession = 0n33</span><br><span class="line">    NonPagedPoolMustSucceedSession = 0n34</span><br><span class="line">    DontUseThisTypeSession = 0n35</span><br><span class="line">    NonPagedPoolCacheAlignedSession = 0n36</span><br><span class="line">    PagedPoolCacheAlignedSession = 0n37</span><br><span class="line">    NonPagedPoolCacheAlignedMustSSession = 0n38</span><br><span class="line">    NonPagedPoolNx = 0n512</span><br><span class="line">    NonPagedPoolNxCacheAligned = 0n516</span><br><span class="line">    NonPagedPoolSessionNx = 0n544</span><br></pre></td></tr></table></figure>
+
+<h3 id="池chunk头部"><a href="#池chunk头部" class="headerlink" title="池chunk头部"></a>池chunk头部</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">kd&gt; dt nt!_POOL_HEADER</span><br><span class="line">    +0x000 PreviousSize             : Pos 0, 8 Bits</span><br><span class="line">    +0x000 PoolIndex                : Pos 8, 8 Bits</span><br><span class="line">    +0x000 BlockSize                : Pos 16, 8 Bits</span><br><span class="line">    +0x000 PoolType                 : Pos 24, 8 Bits  //判断池chunk是否是free, 属于哪个池资源</span><br><span class="line">    +0x000 Ulong1                   : Uint4B</span><br><span class="line">    +0x004 PoolTag                  : Uint4B</span><br><span class="line">    +0x008 ProcessBilled            : Ptr64 _EPROCESS //该chunk的拥有进程</span><br><span class="line">    +0x008 AllocatorBackTraceIndex  : Uint2B</span><br><span class="line">    +0x00a PoolTagHash              : Uint2B</span><br></pre></td></tr></table></figure>
+
+<h2 id="内核安全机制"><a href="#内核安全机制" class="headerlink" title="内核安全机制"></a>内核安全机制</h2><h3 id="不可执行非分页池-NX-Non-Paged-Pool"><a href="#不可执行非分页池-NX-Non-Paged-Pool" class="headerlink" title="不可执行非分页池(NX Non-Paged Pool)"></a>不可执行非分页池(NX Non-Paged Pool)</h3><p><code>PoolType=0x200</code>为NX非分页池, 每个非分页池创建了两个池描述符(一个可执行另一个不可执行)  </p>
+<h3 id="内核池Cookie"><a href="#内核池Cookie" class="headerlink" title="内核池Cookie"></a>内核池Cookie</h3><p>在特定位置插入不可预测数据(内核池Cookie)来保护数据不被篡改</p>
+<h3 id="进程指针编码"><a href="#进程指针编码" class="headerlink" title="进程指针编码"></a>进程指针编码</h3><p>分配内存时以 XOR 加密<code>nt!_POOL_HEADER+0x008 ProcessBilled</code>, 密钥为 池cookie 和 池头首地址; 释放时会解密并校验</p>
+<h3 id="Lookaside-Cookie"><a href="#Lookaside-Cookie" class="headerlink" title="Lookaside Cookie"></a>Lookaside Cookie</h3><p>由池cookie和所用池chunk的首地址 XOR 编码, 由于单链表lookaside只使用了next, 我们把加密后的值放到另一个指针处以检测溢出</p>
+<h3 id="缓存对齐分配Cookie"><a href="#缓存对齐分配Cookie" class="headerlink" title="缓存对齐分配Cookie"></a>缓存对齐分配Cookie</h3><p>为了在内存操作中提升性能, 降低(是提高吧…)缓存行命中的数量, 池分配可以按处理器缓存边界对齐. <code>PoolType=...CacheAligned...</code><br>由池cookie和所用池chunk的首地址 XOR 编码,   </p>
+<h3 id="安全链入链出-Un-linking"><a href="#安全链入链出-Un-linking" class="headerlink" title="安全链入链出((Un)linking)"></a>安全链入链出((Un)linking)</h3><ul>
+<li>双向链表的校验: <code>if((((Entry‐&gt;Flink)‐&gt;Blink) != Entry) || (((Entry‐&gt;Blink)‐&gt;Flink) != Entry))</code></li>
+<li>池索引校验: free时检查池索引是否在池描述符数组边界内; alloc时比较它和最初用于检索池描述符的索引</li>
+</ul>
+<h2 id="攻击"><a href="#攻击" class="headerlink" title="攻击"></a>攻击</h2><h3 id="块尺寸攻击"><a href="#块尺寸攻击" class="headerlink" title="块尺寸攻击"></a>块尺寸攻击</h3><p>由于一页起始位置chunk的<code>+0x000 PreviousSize</code>为null, 所以一页中最后chunk的大小无法被验证.<br>那么修改已分配chunk的大小令其将一页中剩余部分包括进去, free时就可以把这一大块都free掉</p>
+<h3 id="切割碎片攻击"><a href="#切割碎片攻击" class="headerlink" title="切割碎片攻击"></a>切割碎片攻击</h3><p>由于分配free chunk时只会检查Flink, Blink而不会检查chunk大小.<br>那么可以通过修改空闲块A大小, 将相邻的已分配内存B并入该空闲块. 分配时通过控制分配大小控制切割块让B剩下, 这样之后的alloc就可以得到B.</p>
+<h1 id="Code"><a href="#Code" class="headerlink" title="Code"></a>Code</h1><p>整理了 <em>Windows 8 Heap Internals</em> 中的代码为<br><a href="/downLoad/userheapfree.c">userheapfree.c</a><br><a href="/downLoad/userheapalloc.c">userheapalloc.c</a></p>
+<h1 id="REFERENCE"><a href="#REFERENCE" class="headerlink" title="REFERENCE"></a>REFERENCE</h1><p>Windows 8 Heap Internals<br><a target="_blank" rel="noopener" href="https://bbs.pediy.com/thread-246911.htm">[翻译]Windows 8堆内部机理</a><br><a target="_blank" rel="noopener" href="https://blog.csdn.net/ithzhang/article/details/12711431">windows程序员进阶系列：《软件调试》之Win32堆</a><br><a target="_blank" rel="noopener" href="https://www.cnblogs.com/aliflycoris/p/5914663.html">Windows7 x64 了解堆</a><br><a target="_blank" rel="noopener" href="https://bbs.pediy.com/thread-224136.htm">[原创]堆学习记录</a><br><a target="_blank" rel="noopener" href="https://lse.epita.fr/lse-summer-week-2014/slides/lse-summer-week-2014-23-An%20overview%20of%20the%20LFH.pdf">An overview of the LFH</a></p>
+</div><!-- comment system--><div class="container"><hr><div class="comment"></div><script src="//cdn1.lncld.net/static/js/3.0.4/av-min.js"></script>
+<script src="//cdn.jsdelivr.net/npm/valine/dist/Valine.min.js"></script>
+<script type="text/javascript">
+var leancloud_appid = 'gE27hCFSwgLvpzCHoSBfhQvw-gzGzoHsz';
+var leancloud_appkey = 'zMPlPQ3u72NBSzC6PxM0cqKq';
+var valine_url = 'http://example.com/2018/11/22/winheap/';
+var valine_notify = true;
+var valine_verify = true;
+var valine_placeholder = '吱一声嘛~ヾﾉ≧∀≦)o';
+new Valine({
+         av: AV, // source from av-min.js
+         el: '.comment' ,
+         notify: valine_notify,
+         verify: valine_verify,
+         app_id: leancloud_appid,
+         app_key: leancloud_appkey,
+         placeholder: valine_placeholder,
+         path: valine_url
+     });
+</script></div></article><footer id="footer"><div class="container"><div class="bar"><div class="social"><a href="mailto:lqliuyuwei@outlook.com" target="_blank"><i class="fa fa-envelope-o"></i></a><a href="https://github.com/Marsman1996" target="_blank"><i class="fa fa-github"></i></a></div><div class="footer">© 2021 <a href="/" rel="nofollow">Marsman1996</a>. Powered by <a rel="nofollow" target="_blank" href="https://hexo.io">Hexo</a>. Theme <a target="_blank" href="https://github.com/lotabout/very-simple">very-simple</a>.</div></div></div></footer><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/2.1.5/jquery.fancybox.css"><script src="//cdn.bootcss.com/jquery/2.0.3/jquery.min.js"></script><script src="//cdn.bootcss.com/fancybox/2.1.5/jquery.fancybox.pack.js"></script><script>$(document).ready(function() {
+    $(".fancybox").fancybox();
+});
+</script></body><script>(function(b,o,i,l,e,r){b.GoogleAnalyticsObject=l;b[l]||(b[l]=
+function(){(b[l].q=b[l].q||[]).push(arguments)});b[l].l=+new Date;
+e=o.createElement(i);r=o.getElementsByTagName(i)[0];
+e.src='//www.google-analytics.com/analytics.js';
+r.parentNode.insertBefore(e,r)}(window,document,'script','ga'));
+ga('create','UA-129024647-1');ga('send','pageview');</script></html>

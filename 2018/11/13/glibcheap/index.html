@@ -1,0 +1,323 @@
+<!DOCTYPE html><html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description" content="This blog is used to record my study process"><title>Note of glibc heap details | Marsman1996's blog</title><link rel="stylesheet" type="text/css" href="/css/normalize.css"><link rel="stylesheet" type="text/css" href="/css/highlight.css"><link rel="stylesheet" type="text/css" href="/css/very-simple.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/font-awesome/4.5.0/css/font-awesome.min.css"><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><meta name="generator" content="Hexo 5.4.0"></head><body><!-- include the sidebar--><!-- include ./includes/sidebar.jade--><!-- Blog title and subtitle--><header><div class="container header"><a id="logo" href="/." class="title">Marsman1996's blog</a><br><span class="subtitle">一小股火星军, 两小股火星军, 三小股火星军~</span><label id="toggle-menu" for="menu" onclick><i class="fa fa-bars"></i></label></div></header><!-- use checkbox hack for toggle nav-bar on small screens--><input id="menu" type="checkbox"><!-- Navigation Links--><nav id="nav"><div class="container"><a href="/" class="sidebar-nav-item active">Home</a><a href="/archives" class="sidebar-nav-item">Archives</a></div></nav><div id="header-margin-bar"></div><!-- gallery that comes before the header--><div class="wrapper"><div class="container post-header"><h1>Note of glibc heap details</h1></div></div><div class="wrapper"><div class="container meta"><div class="post-time">2018-11-13</div><div class="post-categories"><a class="post-category-link" href="/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记</a></div><div class="post-tags"><a class="post-tag-none-link" href="/tags/Linux/" rel="tag">Linux</a>/<a class="post-tag-none-link" href="/tags/heap/" rel="tag">heap</a></div></div></div><article><div class="container post"><p>这篇文章记录glic库中malloc是如何工作的. 主要参考了 <em><a target="_blank" rel="noopener" href="https://sploitfun.wordpress.com/2015/02/10/understanding-glibc-malloc/">Understanding glibc malloc</a></em>  </p>
+<h1 id="目录"><a href="#目录" class="headerlink" title="目录 "></a>目录 <!-- omit in toc --></h1><ul>
+<li><a href="#Memory-Allocators">Memory Allocators</a></li>
+<li><a href="#Syscall">Syscall</a><ul>
+<li><a href="#brk">brk</a></li>
+<li><a href="#mmap">mmap</a></li>
+</ul>
+</li>
+<li><a href="#%E5%86%85%E5%AD%98%E7%BB%93%E6%9E%84">内存结构</a><ul>
+<li><a href="#Chunk">Chunk</a><ul>
+<li><a href="#Allocated-Chunk">Allocated chunk</a></li>
+<li><a href="#Free-Chunk">Free chunk</a></li>
+<li><a href="#Top-Chunk">Top Chunk</a></li>
+<li><a href="#Last-Remainder-Chunk">Last Remainder Chunk</a></li>
+</ul>
+</li>
+<li><a href="#Bin">Bin</a><ul>
+<li><a href="#Fast-Bin">Fast bin</a></li>
+<li><a href="#Unsorted-bin">Unsorted bin</a></li>
+<li><a href="#Small-bin">Small bin</a></li>
+<li><a href="#Large-bin">Large bin</a></li>
+</ul>
+</li>
+<li><a href="#Heap">Heap</a></li>
+<li><a href="#Arena">Arena</a></li>
+</ul>
+</li>
+<li><a href="#%E5%A0%86%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86">堆内存管理</a><ul>
+<li><a href="#malloc">malloc()</a></li>
+<li><a href="#free">free()</a></li>
+</ul>
+</li>
+<li><a href="#REFERENCE">REFERENCE</a></li>
+</ul>
+<h1 id="Memory-Allocators"><a href="#Memory-Allocators" class="headerlink" title="Memory Allocators"></a>Memory Allocators</h1><p>堆内存分配器主流的有.  </p>
+<ul>
+<li>dlmalloc – 第一个被广泛使用的通用动态内存分配器；</li>
+<li>ptmalloc2 – glibc 内置分配器的原型；</li>
+<li>jemalloc – FreeBSD ＆ Firefox 所用分配器；</li>
+<li>tcmalloc – Google 贡献的分配器；</li>
+<li>libumem – Solaris 所用分配器；</li>
+</ul>
+<p><img src="glibcheap/allocators.png" alt="allocators history">  </p>
+<p>这篇文章学习glibc库, 代码以glibc-2.28为例</p>
+<h1 id="Syscall"><a href="#Syscall" class="headerlink" title="Syscall"></a>Syscall</h1><p><code>malloc()</code> 按传入参数大小决定调用 <code>brk()</code> 或 <code>mmap()</code> .  </p>
+<p><img src="glibcheap/linuxmem.png" alt="linuxmem">  </p>
+<!-- <img src="glibcheap/linuxmem.png" width = 30% height = 30% />   -->
+
+<h2 id="brk"><a href="#brk" class="headerlink" title="brk"></a>brk</h2><p>初始状态堆的起点(start_brk)和堆终点(brk)是指向相同的位置的.<br><a target="_blank" rel="noopener" href="http://man7.org/linux/man-pages/man2/sbrk.2.html" title="BRK man-page"><code>brk()</code></a> 通过增加program break location(brk)获得更多内存, 且保留原内存中的数据.  </p>
+<ul>
+<li>当ASLR关闭时, start_brk和brk将指向data/bss段的结尾.</li>
+<li>当ASLR打开时, start_brk和brk的值将等于data/bss段的结尾加上一个随机的brk偏移.</li>
+</ul>
+<h2 id="mmap"><a href="#mmap" class="headerlink" title="mmap"></a>mmap</h2><p><a target="_blank" rel="noopener" href="http://man7.org/linux/man-pages/man2/mmap.2.html" title="MMAP man-page"><code>mmap()</code></a> 在 Memory Mapping Segment 处创建<font color=red>清零后</font>的新内存.</p>
+<h1 id="内存结构"><a href="#内存结构" class="headerlink" title="内存结构"></a>内存结构</h1><p>堆内存管理用到4个数据结构 Arena, Heap, Chunk 和 Bin<br>Arena &gt; Heap &gt; Chunk  </p>
+<h2 id="Chunk"><a href="#Chunk" class="headerlink" title="Chunk"></a>Chunk</h2><p>chunk是堆内存管理的最小单元, 其结构源码如下  </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">struct malloc_chunk &#123;</span><br><span class="line">  INTERNAL_SIZE_T      mchunk_prev_size;  /* Size of previous chunk (if free).  */</span><br><span class="line">  INTERNAL_SIZE_T      mchunk_size;       /* Size in bytes, including overhead. */</span><br><span class="line"></span><br><span class="line">  struct malloc_chunk* fd;         /* double links -- used only if free. */</span><br><span class="line">  struct malloc_chunk* bk;</span><br><span class="line"></span><br><span class="line">  /* Only used for large blocks: pointer to next larger size.  */</span><br><span class="line">  struct malloc_chunk* fd_nextsize; /* double links -- used only if free. */</span><br><span class="line">  struct malloc_chunk* bk_nextsize;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<p>存在最小大小限制: <code>#define MIN_CHUNK_SIZE        (offsetof(struct malloc_chunk, fd_nextsize))</code><br>chunk最小为 16 bytes(32位环境)/32 bytes(64位环境)<br>存在对齐要求:  <code>#define MALLOC_ALIGNMENT (2 * SIZE_SZ &lt; __alignof__ (long double) ? __alignof__ (long double) : 2 * SIZE_SZ)</code><br>chunk对齐大小为 8 bytes(32位环境)/16 bytes(64位环境)</p>
+<p>chunk被分为以下4类</p>
+<h3 id="Allocated-chunk"><a href="#Allocated-chunk" class="headerlink" title="Allocated chunk"></a>Allocated chunk</h3><p>是已经被分配出去的chunk, 数据结构如下:  </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">    chunk-&gt; +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             Size of previous chunk, if unallocated (P clear)  |</span><br><span class="line">        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             Size of chunk, in bytes                     |A|M|P|</span><br><span class="line">      mem-&gt; +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             User data starts here...                          .</span><br><span class="line">        .                                                               .</span><br><span class="line">        .             (malloc_usable_size() bytes)                      .</span><br><span class="line">        .                                                               |</span><br><span class="line">nextchunk-&gt; +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             (size of chunk, but used for application data)    |</span><br><span class="line">        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             Size of next chunk, in bytes                |A|0|1|</span><br><span class="line">        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>Flags</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>A(NON_MAIN_ARENA)</td>
+<td>表示该内存块由线程分配</td>
+</tr>
+<tr>
+<td>M(IS_MAPPED)</td>
+<td>表示该块内存通过mmap方式分配</td>
+</tr>
+<tr>
+<td>P(PREV_INUSE)</td>
+<td>表示内存中前一内存块已被分配</td>
+</tr>
+<tr>
+<td><code>malloc()</code>返回地址为 mem, 即 chunk大小为<code>malloc()</code>传入参数 + chunk头部 然后对齐.</td>
+<td></td>
+</tr>
+</tbody></table>
+<h3 id="Free-chunk"><a href="#Free-chunk" class="headerlink" title="Free chunk"></a>Free chunk</h3><p>被释放的chunk, 数据结构如下</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">    chunk-&gt; +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             Size of previous chunk, if unallocated (P clear)  |</span><br><span class="line">        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">`head:&#x27; |             Size of chunk, in bytes                     |A|0|P|</span><br><span class="line">      mem-&gt; +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             Forward pointer to next chunk in list             |</span><br><span class="line">        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             Back pointer to previous chunk in list            |</span><br><span class="line">        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             Unused space (may be 0 bytes long)                .</span><br><span class="line">        .                                                               .</span><br><span class="line">        .                                                               |</span><br><span class="line">nextchunk-&gt; +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">`foot:&#x27; |             Size of chunk, in bytes                           |</span><br><span class="line">        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br><span class="line">        |             Size of next chunk, in bytes                |A|0|0|</span><br><span class="line">        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span><br></pre></td></tr></table></figure>
+<p>fd/bk 指向同一bin中前一个/后一个 chunk</p>
+<h3 id="Top-Chunk"><a href="#Top-Chunk" class="headerlink" title="Top Chunk"></a>Top Chunk</h3><p>位于Arena顶部(高地址)的chunk. 当不存在free chunk满足内存分配需求时, 分配器会尝试将top chunk低地址部分分配给用户.<br>如果top chunk大小小于<code>malloc()</code>传入参数则需要扩展heap.</p>
+<h3 id="Last-Remainder-Chunk"><a href="#Last-Remainder-Chunk" class="headerlink" title="Last Remainder Chunk"></a>Last Remainder Chunk</h3><p>最后一次 small request 中因分割而得到的剩余部分<br>当用户请求 small chunk 而无法从 small bin 和 unsorted bin 得到服务时, 分配器就会通过扫描 binmaps 找到最小非空 bin. 正如前文所提及的, 如果这样的 bin 找到了, 其中最合适的 chunk 就会分割为两部分: 返回给用户的 User chunk 和添加到 unsorted bin 中的 Remainder chunk.<br>它有利于改进引用局部性, 即后续对 small chunk 的 malloc 请求可能最终被分配得彼此靠近.</p>
+<blockquote>
+<p>关于 bin 和 binmaps 在后面部分会讲到, 可以先看了再返回来?</p>
+</blockquote>
+<h2 id="Bin"><a href="#Bin" class="headerlink" title="Bin"></a>Bin</h2><p>bin是一种记录free chunk的数据结构. bin被分为以下4类: </p>
+<h3 id="Fast-bin"><a href="#Fast-bin" class="headerlink" title="Fast bin"></a>Fast bin</h3><p>fastbin 由<code>mfastbinptr fastbinsY[NFASTBINS];</code>存储<br>在内存分配和释放过程中, fastbin是所有bin中操作速度最快的.  </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">#define NFASTBINS  (fastbin_index (request2size (MAX_FAST_SIZE)) + 1)</span><br><span class="line">#define MAX_FAST_SIZE     (80 * SIZE_SZ / 4)</span><br><span class="line">#define request2size(req)                                         \</span><br><span class="line">  (((req) + SIZE_SZ + MALLOC_ALIGN_MASK &lt; MINSIZE)  ?             \</span><br><span class="line">   MINSIZE :                                                      \</span><br><span class="line">   ((req) + SIZE_SZ + MALLOC_ALIGN_MASK) &amp; ~MALLOC_ALIGN_MASK)</span><br><span class="line">#define fastbin_index(sz) ((((unsigned int) (sz)) &gt;&gt; (SIZE_SZ == 8 ? 4 : 3)) - 2)</span><br></pre></td></tr></table></figure>
+<p><img src="glibcheap/fastbin.png" alt="fastbin"><br>fastbin的特性有:  </p>
+<ol>
+<li>fastbin 有10个(32位和64位下都是)  </li>
+<li>fastbin 是单链表 </li>
+<li>fastbin 中 fastchunk 大小为 16<del>80 bytes(32位)/32</del>160 bytes(64位), 同一链表中 chunk 大小相同 (不够10个啊???)  </li>
+<li>fastbin 增减 chunk 发生在链表顶端, 后加入的 chunk 会先被分配出去(LIFO)</li>
+<li>fastbin 中相邻 free chunk 不会被合并, 通过将P标志位置1实现  </li>
+</ol>
+<h3 id="Unsorted-bin"><a href="#Unsorted-bin" class="headerlink" title="Unsorted bin"></a>Unsorted bin</h3><p>unsortedbin 由<code>mchunkptr bins[NBINS * 2 - 2];</code>中 Bin1 存储  </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">#define NBINS             128</span><br><span class="line">#define bin_at(m, i) \</span><br><span class="line">  (mbinptr) (((char *) &amp;((m)-&gt;bins[((i) - 1) * 2]))			      \</span><br><span class="line">             - offsetof (struct malloc_chunk, fd))</span><br></pre></td></tr></table></figure>
+
+<p>被<code>free()</code>的 small chunk 和 large chunk 会被暂存在 unsortedbin 中  </p>
+<p><img src="glibcheap/otherbin.png" alt="unsortedbin, smallbin and largebin"></p>
+<p>unsortedbin的特性有:</p>
+<ol>
+<li>unsortedbin 有1个</li>
+<li>unsortedbin 是双向循环链表</li>
+<li>unsortedbin 中 chunk 大小无限制</li>
+</ol>
+<p>来源:</p>
+<ol>
+<li>freechunk 合并</li>
+<li>last reminder</li>
+</ol>
+<h3 id="Small-bin"><a href="#Small-bin" class="headerlink" title="Small bin"></a>Small bin</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">#define in_smallbin_range(sz) ((unsigned long) (sz) &lt; (unsigned long) MIN_LARGE_SIZE)</span><br><span class="line">#define MIN_LARGE_SIZE    ((NSMALLBINS - SMALLBIN_CORRECTION) * SMALLBIN_WIDTH)</span><br><span class="line">#define NSMALLBINS         64</span><br><span class="line">#define SMALLBIN_CORRECTION (MALLOC_ALIGNMENT &gt; 2 * SIZE_SZ)</span><br><span class="line">#define SMALLBIN_WIDTH    MALLOC_ALIGNMENT</span><br><span class="line"></span><br><span class="line">代入得 MIN_LARGE_SIZE = 64 * MALLOC_ALIGNMENT = 512(32) / 1024(64)</span><br></pre></td></tr></table></figure>
+
+<p>smallbin的特性有:  </p>
+<ol>
+<li>smallbin 有62个</li>
+<li>smallbin 是双向循环链表</li>
+<li>smallbin 中 smallchunk 大小为 [16, 512)bytes(32) / [32, 1024)(64), 同一链表中 chunk 大小相同</li>
+<li>smallbin 增加 chunk 在链表顶端, 删除 chunk 在链表尾部, 即先加入的 chunk 会先被分配出去(FIFO)</li>
+<li>smallbin 中相邻 chunk 会被合并</li>
+</ol>
+<h3 id="Large-bin"><a href="#Large-bin" class="headerlink" title="Large bin"></a>Large bin</h3><p>largebin的特性有:  </p>
+<ol>
+<li>largebin 有63个</li>
+<li>largebin 是双向循环链表</li>
+<li>largebin 中 largechunk 大小为 [512, +)bytes(32) / [1024, +)(64), 同一链表中 chunk 大小都在某个范围内, chunk 从顶端到尾端递减保存</li>
+<li>largebin 增加 chunk 在链表顶端, 删除 chunk 在链表尾部, 即先加入的 chunk 会先被分配出去(FIFO) </li>
+<li>largebin 中相邻 chunk 会被合并</li>
+</ol>
+<p>从这张表格可以更直观地看出各个bin的特点(?):  </p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Linked List</th>
+<th>I/O</th>
+<th>Coalescing</th>
+<th>Number</th>
+<th>Size(32/64)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>fastbin</td>
+<td>Single</td>
+<td>LIFO</td>
+<td>No</td>
+<td>10</td>
+<td>[16, 80] / [32, 160]</td>
+</tr>
+<tr>
+<td>unsortedbin</td>
+<td>Double Circular</td>
+<td></td>
+<td></td>
+<td>1</td>
+<td>No limit</td>
+</tr>
+<tr>
+<td>smallbin</td>
+<td>Double Circular</td>
+<td>FIFO</td>
+<td>Yes</td>
+<td>62</td>
+<td>[16, 512) / [32, 1024)</td>
+</tr>
+<tr>
+<td>largebin</td>
+<td>Double Circular</td>
+<td>FIFO</td>
+<td>Yes</td>
+<td>63</td>
+<td>[512, +) / [1024, +)</td>
+</tr>
+</tbody></table>
+<h2 id="Heap"><a href="#Heap" class="headerlink" title="Heap"></a>Heap</h2><p>heap 头部数据结构源码如下:  </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">typedef struct _heap_info</span><br><span class="line">&#123;</span><br><span class="line">  mstate ar_ptr; /* Arena for this heap. */</span><br><span class="line">  struct _heap_info *prev; /* Previous heap. */</span><br><span class="line">  size_t size;   /* Current size in bytes. */</span><br><span class="line">  size_t mprotect_size; /* Size in bytes that has been mprotected</span><br><span class="line">                           PROT_READ|PROT_WRITE.  */</span><br><span class="line">  /* Make sure the following data is properly aligned, particularly</span><br><span class="line">     that sizeof (heap_info) + 2 * SIZE_SZ is a multiple of</span><br><span class="line">     MALLOC_ALIGNMENT. */</span><br><span class="line">  char pad[-6 * SIZE_SZ &amp; MALLOC_ALIGN_MASK];</span><br><span class="line">&#125; heap_info;</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>关于pad: glibc要求 sizeof (heap_info) + 2 * SIZE_SZ 是 MALLOC_ALIGNMENT 的倍数, </p>
+</blockquote>
+<p>1个 Thread Arena 可以有多个 Heap, 当 Thread Arena 中 heap 空间不够时会调用<code>mmap()</code>申请新的 heap 空间作为一个新的 heap 加入原 Arena, 这些 Heap 以单链表的形式穿起来.<br><img src="glibcheap/mulheap.png" alt="multiple heap">  </p>
+<h2 id="Arena"><a href="#Arena" class="headerlink" title="Arena"></a>Arena</h2><p>Arena 是堆内存管理中最大的数据结构, 分为 Main Arena 和 Thread Arena.<br>Arena 头部数据结构源码如下: </p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">struct malloc_state</span><br><span class="line">&#123;</span><br><span class="line">  /* Serialize access.  */</span><br><span class="line">  mutex_t mutex;</span><br><span class="line"></span><br><span class="line">  /* Flags (formerly in max_fast).  */</span><br><span class="line">  int flags;</span><br><span class="line"></span><br><span class="line">  /* Fastbins */</span><br><span class="line">  mfastbinptr fastbinsY[NFASTBINS];</span><br><span class="line"></span><br><span class="line">  /* Base of the topmost chunk -- not otherwise kept in a bin */</span><br><span class="line">  mchunkptr top;</span><br><span class="line"></span><br><span class="line">  /* The remainder from the most recent split of a small request */</span><br><span class="line">  mchunkptr last_remainder;</span><br><span class="line"></span><br><span class="line">  /* Normal bins packed as described above */</span><br><span class="line">  mchunkptr bins[NBINS * 2 - 2];</span><br><span class="line"></span><br><span class="line">  /* Bitmap of bins */</span><br><span class="line">  unsigned int binmap[BINMAPSIZE];</span><br><span class="line"></span><br><span class="line">  /* Linked list */</span><br><span class="line">  struct malloc_state *next;</span><br><span class="line"></span><br><span class="line">  /* Linked list for free arenas.  */</span><br><span class="line">  struct malloc_state *next_free;       //原先被分配有 Thread 但是所有的 Thread 都被关闭的 Arena 会被放到这里</span><br><span class="line"></span><br><span class="line">  /* Memory allocated from the system in this arena.  */</span><br><span class="line">  INTERNAL_SIZE_T system_mem;           //Arena已分配内存大小</span><br><span class="line">  INTERNAL_SIZE_T max_system_mem;       //Arena可以被系统分配的最大内存大小</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>glibc会尽量为一个多线程程序的每个线程都分配1个 Arena, 但是 Arena 个数是有限的: 2倍CPU核数(32位环境) / 8倍CPU核数(64位环境). 当某线程申请使用内存但当前 Arena 个数已达最大值时, glibc首先遍历所有 Arena 并尝试获取它的 mutex, 若成功则该线程与 Arena 原线程共享该 Arena, 否则继续等待直到成功获取 mutex.  </p>
+<p><img src="glibcheap/arena.png" alt="arena"><br>Main Arena 与 Thread Arena 比较表:  </p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Arena Head</th>
+<th>Heap Head</th>
+<th>Heap Num</th>
+<th>alloc mem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Main</td>
+<td>global</td>
+<td>N</td>
+<td>1</td>
+<td><code>brk()</code></td>
+</tr>
+<tr>
+<td>Thread</td>
+<td>inside</td>
+<td>Y</td>
+<td>many</td>
+<td><code>mmap()</code></td>
+</tr>
+</tbody></table>
+<h1 id="堆内存管理"><a href="#堆内存管理" class="headerlink" title="堆内存管理"></a>堆内存管理</h1><h2 id="malloc"><a href="#malloc" class="headerlink" title="malloc()"></a>malloc()</h2><p><code>malloc()</code> 功能主要由 <code>static void *_int_malloc (mstate av, size_t bytes)</code> 实现  </p>
+<ul>
+<li><em>bytes</em> 位于 fastbin 时:<ol>
+<li>根据大小获得fastbin的index</li>
+<li>根据index获取fastbin中链表的头指针<ul>
+<li>如果头指针为 NULL, 转去smallbin</li>
+</ul>
+</li>
+<li>将头指针的下一个chunk地址作为链表头指针<!-- 4. 分配的chunk保持inuse状态, 避免被合并 --></li>
+<li>检查分配chunk的size是否属于fastbin</li>
+<li>返回除去chunk_header的地址 <strong>return</strong></li>
+</ol>
+</li>
+<li><em>bytes</em> 位于 smallbin 时:<ol>
+<li>根据大小获得smallbin的index</li>
+<li>根据index获取smallbin中双向循环链表的头指针</li>
+<li>将链表最后一个chunk赋值给victim<ul>
+<li>if(victim == 表头)<br>链表为空, 不从smallbin中分配  </li>
+<li>else if(victim == 0)<br>链表未初始化, 将fastbin中的chunk合并  </li>
+<li>else<br>取出victim, 设置inuse  <!-- 4. 检查victim是否为main_arena,设置标志位 --></li>
+</ul>
+</li>
+<li>检查<code>victim-&gt;bk-&gt;fd == victim</code></li>
+<li>返回除去chunk_header的地址 <strong>return</strong></li>
+</ol>
+</li>
+<li><em>bytes</em> 位于 largebin 时:<ol>
+<li>根据大小获得largebin的index</li>
+<li>将fastbin中chunk合并, 加入到unsortbin中</li>
+</ol>
+</li>
+<li>对unsortedbin的操作:<ol>
+<li>反向遍历unsortedbin, 检查 2*size_t &lt; chunk_size &lt; 内存总分配量</li>
+<li>unsortedbin的特殊分配:<br> 如果前一步smallbin分配未完成<br> 并且 unsortedbin中只有一个chunk<br> 并且该chunk为 last remainder chunk<br> 并且该chunk大小 &gt; (所需大小 + 最小分配大小)<br> 则切分一块分配 <strong>return</strong></li>
+<li>如果请求大小正好等于当前遍历chunk的大小, 则直接分配 <strong>return</strong></li>
+<li>继续遍历, 将合适大小的chunk加入到smallbin中, 向前插入作为链表的第一个chunk. (smallbin中每个链表中chunk大小相同)</li>
+<li>将合适大小的chunk加入到largebin中, 插入到合适的位置(largebin中每个链表chunk由大到小排列)</li>
+</ol>
+</li>
+<li>对largebin的操作:<ol>
+<li>反向遍历largebin, 由下到上查找, 找到合适大小后<ul>
+<li>检查unsortedbin的第一个chunk的bk的fd是否指向自己</li>
+<li>切分后大小 &lt; 最小分配大小, 返回整个chunk, 会略大于申请大小 <strong>return</strong></li>
+<li>切分后大小 &gt; 最小分配大小, 加入 unsortedbin. <strong>return</strong></li>
+</ul>
+</li>
+<li>未找到, index+1, 继续寻找</li>
+</ol>
+</li>
+<li>top chunk:  </li>
+<li>向系统申请<h2 id="free"><a href="#free" class="headerlink" title="free()"></a>free()</h2><code>free()</code>功能主要由<code>static void _int_free (mstate av, mchunkptr p, int have_lock)</code>实现</li>
+<li>使用<code>chunksize(p)</code>宏获取 <em>p</em> 的 <em>size</em></li>
+<li>安全检查:<ol>
+<li>chunk的指针地址溢出?</li>
+<li>chunk 的大小 &gt;= MINSIZE(最小分配大小)? 并且地址是否对齐?</li>
+</ol>
+</li>
+<li><em>size</em> 位于 fastbin 时:<ol>
+<li>检查下一个chunk的size: 2*size_t &lt; chunk_size &lt; 内存总分配量</li>
+<li>double free检查: 检查当前free的chunk是否与fastbin中的第一个chunk相同，相同则报错</li>
+<li><strong>return</strong></li>
+</ol>
+</li>
+<li><em>size</em> 位于其他 bin 时:<ol>
+<li>其他安全检查:<ul>
+<li>检查下一个chunk的size：2*size_t &lt; chunk_size &lt; 内存总分配量</li>
+<li>double free检查: </li>
+</ul>
+</li>
+<li>chunk 合并</li>
+<li>unsortedbin安全检查:</li>
+<li><strong>return</strong></li>
+</ol>
+</li>
+</ul>
+<h1 id="REFERENCE"><a href="#REFERENCE" class="headerlink" title="REFERENCE"></a>REFERENCE</h1><p><a target="_blank" rel="noopener" href="https://sploitfun.wordpress.com/2015/02/10/understanding-glibc-malloc/">Understanding glibc malloc</a><br><a target="_blank" rel="noopener" href="https://www.cnblogs.com/alisecurity/p/5486458.html">Linux堆内存管理深入分析</a><br><a target="_blank" rel="noopener" href="http://jsfiddle.net/fracz/guan1oz1/374/" title="GithGraph">画类似GitHub那种commit图的工具</a><br><a target="_blank" rel="noopener" href="https://www.cnblogs.com/h2zZhou/p/7741677.html">Dance In Heap</a>  </p>
+</div><!-- comment system--><div class="container"><hr><div class="comment"></div><script src="//cdn1.lncld.net/static/js/3.0.4/av-min.js"></script>
+<script src="//cdn.jsdelivr.net/npm/valine/dist/Valine.min.js"></script>
+<script type="text/javascript">
+var leancloud_appid = 'gE27hCFSwgLvpzCHoSBfhQvw-gzGzoHsz';
+var leancloud_appkey = 'zMPlPQ3u72NBSzC6PxM0cqKq';
+var valine_url = 'http://example.com/2018/11/13/glibcheap/';
+var valine_notify = true;
+var valine_verify = true;
+var valine_placeholder = '吱一声嘛~ヾﾉ≧∀≦)o';
+new Valine({
+         av: AV, // source from av-min.js
+         el: '.comment' ,
+         notify: valine_notify,
+         verify: valine_verify,
+         app_id: leancloud_appid,
+         app_key: leancloud_appkey,
+         placeholder: valine_placeholder,
+         path: valine_url
+     });
+</script></div></article><footer id="footer"><div class="container"><div class="bar"><div class="social"><a href="mailto:lqliuyuwei@outlook.com" target="_blank"><i class="fa fa-envelope-o"></i></a><a href="https://github.com/Marsman1996" target="_blank"><i class="fa fa-github"></i></a></div><div class="footer">© 2021 <a href="/" rel="nofollow">Marsman1996</a>. Powered by <a rel="nofollow" target="_blank" href="https://hexo.io">Hexo</a>. Theme <a target="_blank" href="https://github.com/lotabout/very-simple">very-simple</a>.</div></div></div></footer><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/2.1.5/jquery.fancybox.css"><script src="//cdn.bootcss.com/jquery/2.0.3/jquery.min.js"></script><script src="//cdn.bootcss.com/fancybox/2.1.5/jquery.fancybox.pack.js"></script><script>$(document).ready(function() {
+    $(".fancybox").fancybox();
+});
+</script></body><script>(function(b,o,i,l,e,r){b.GoogleAnalyticsObject=l;b[l]||(b[l]=
+function(){(b[l].q=b[l].q||[]).push(arguments)});b[l].l=+new Date;
+e=o.createElement(i);r=o.getElementsByTagName(i)[0];
+e.src='//www.google-analytics.com/analytics.js';
+r.parentNode.insertBefore(e,r)}(window,document,'script','ga'));
+ga('create','UA-129024647-1');ga('send','pageview');</script></html>
