@@ -40,10 +40,10 @@
 <li>tcmalloc – Google 贡献的分配器；</li>
 <li>libumem – Solaris 所用分配器；</li>
 </ul>
-<p><img src="glibcheap/allocators.png" alt="allocators history">  </p>
+<p><img src="/2018/11/13/glibcheap/allocators.png" alt="allocators history">  </p>
 <p>这篇文章学习glibc库, 代码以glibc-2.28为例</p>
 <h1 id="Syscall"><a href="#Syscall" class="headerlink" title="Syscall"></a>Syscall</h1><p><code>malloc()</code> 按传入参数大小决定调用 <code>brk()</code> 或 <code>mmap()</code> .  </p>
-<p><img src="glibcheap/linuxmem.png" alt="linuxmem">  </p>
+<p><img src="/2018/11/13/glibcheap/linuxmem.png" alt="linuxmem">  </p>
 <!-- <img src="glibcheap/linuxmem.png" width = 30% height = 30% />   -->
 
 <h2 id="brk"><a href="#brk" class="headerlink" title="brk"></a>brk</h2><p>初始状态堆的起点(start_brk)和堆终点(brk)是指向相同的位置的.<br><a target="_blank" rel="noopener" href="http://man7.org/linux/man-pages/man2/sbrk.2.html" title="BRK man-page"><code>brk()</code></a> 通过增加program break location(brk)获得更多内存, 且保留原内存中的数据.  </p>
@@ -51,7 +51,7 @@
 <li>当ASLR关闭时, start_brk和brk将指向data/bss段的结尾.</li>
 <li>当ASLR打开时, start_brk和brk的值将等于data/bss段的结尾加上一个随机的brk偏移.</li>
 </ul>
-<h2 id="mmap"><a href="#mmap" class="headerlink" title="mmap"></a>mmap</h2><p><a target="_blank" rel="noopener" href="http://man7.org/linux/man-pages/man2/mmap.2.html" title="MMAP man-page"><code>mmap()</code></a> 在 Memory Mapping Segment 处创建<font color=red>清零后</font>的新内存.</p>
+<h2 id="mmap"><a href="#mmap" class="headerlink" title="mmap"></a>mmap</h2><p><a target="_blank" rel="noopener" href="http://man7.org/linux/man-pages/man2/mmap.2.html" title="MMAP man-page"><code>mmap()</code></a> 在 Memory Mapping Segment 处创建<font color="red">清零后</font>的新内存.</p>
 <h1 id="内存结构"><a href="#内存结构" class="headerlink" title="内存结构"></a>内存结构</h1><p>堆内存管理用到4个数据结构 Arena, Heap, Chunk 和 Bin<br>Arena &gt; Heap &gt; Chunk  </p>
 <h2 id="Chunk"><a href="#Chunk" class="headerlink" title="Chunk"></a>Chunk</h2><p>chunk是堆内存管理的最小单元, 其结构源码如下  </p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line">struct malloc_chunk &#123;</span><br><span class="line">  INTERNAL_SIZE_T      mchunk_prev_size;  /* Size of previous chunk (if free).  */</span><br><span class="line">  INTERNAL_SIZE_T      mchunk_size;       /* Size in bytes, including overhead. */</span><br><span class="line"></span><br><span class="line">  struct malloc_chunk* fd;         /* double links -- used only if free. */</span><br><span class="line">  struct malloc_chunk* bk;</span><br><span class="line"></span><br><span class="line">  /* Only used for large blocks: pointer to next larger size.  */</span><br><span class="line">  struct malloc_chunk* fd_nextsize; /* double links -- used only if free. */</span><br><span class="line">  struct malloc_chunk* bk_nextsize;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
@@ -94,7 +94,7 @@
 <h2 id="Bin"><a href="#Bin" class="headerlink" title="Bin"></a>Bin</h2><p>bin是一种记录free chunk的数据结构. bin被分为以下4类: </p>
 <h3 id="Fast-bin"><a href="#Fast-bin" class="headerlink" title="Fast bin"></a>Fast bin</h3><p>fastbin 由<code>mfastbinptr fastbinsY[NFASTBINS];</code>存储<br>在内存分配和释放过程中, fastbin是所有bin中操作速度最快的.  </p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">#define NFASTBINS  (fastbin_index (request2size (MAX_FAST_SIZE)) + 1)</span><br><span class="line">#define MAX_FAST_SIZE     (80 * SIZE_SZ / 4)</span><br><span class="line">#define request2size(req)                                         \</span><br><span class="line">  (((req) + SIZE_SZ + MALLOC_ALIGN_MASK &lt; MINSIZE)  ?             \</span><br><span class="line">   MINSIZE :                                                      \</span><br><span class="line">   ((req) + SIZE_SZ + MALLOC_ALIGN_MASK) &amp; ~MALLOC_ALIGN_MASK)</span><br><span class="line">#define fastbin_index(sz) ((((unsigned int) (sz)) &gt;&gt; (SIZE_SZ == 8 ? 4 : 3)) - 2)</span><br></pre></td></tr></table></figure>
-<p><img src="glibcheap/fastbin.png" alt="fastbin"><br>fastbin的特性有:  </p>
+<p><img src="/2018/11/13/glibcheap/fastbin.png" alt="fastbin"><br>fastbin的特性有:  </p>
 <ol>
 <li>fastbin 有10个(32位和64位下都是)  </li>
 <li>fastbin 是单链表 </li>
@@ -106,7 +106,7 @@
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">#define NBINS             128</span><br><span class="line">#define bin_at(m, i) \</span><br><span class="line">  (mbinptr) (((char *) &amp;((m)-&gt;bins[((i) - 1) * 2]))			      \</span><br><span class="line">             - offsetof (struct malloc_chunk, fd))</span><br></pre></td></tr></table></figure>
 
 <p>被<code>free()</code>的 small chunk 和 large chunk 会被暂存在 unsortedbin 中  </p>
-<p><img src="glibcheap/otherbin.png" alt="unsortedbin, smallbin and largebin"></p>
+<p><img src="/2018/11/13/glibcheap/otherbin.png" alt="unsortedbin, smallbin and largebin"></p>
 <p>unsortedbin的特性有:</p>
 <ol>
 <li>unsortedbin 有1个</li>
@@ -186,12 +186,12 @@
 <blockquote>
 <p>关于pad: glibc要求 sizeof (heap_info) + 2 * SIZE_SZ 是 MALLOC_ALIGNMENT 的倍数, </p>
 </blockquote>
-<p>1个 Thread Arena 可以有多个 Heap, 当 Thread Arena 中 heap 空间不够时会调用<code>mmap()</code>申请新的 heap 空间作为一个新的 heap 加入原 Arena, 这些 Heap 以单链表的形式穿起来.<br><img src="glibcheap/mulheap.png" alt="multiple heap">  </p>
+<p>1个 Thread Arena 可以有多个 Heap, 当 Thread Arena 中 heap 空间不够时会调用<code>mmap()</code>申请新的 heap 空间作为一个新的 heap 加入原 Arena, 这些 Heap 以单链表的形式穿起来.<br><img src="/2018/11/13/glibcheap/mulheap.png" alt="multiple heap">  </p>
 <h2 id="Arena"><a href="#Arena" class="headerlink" title="Arena"></a>Arena</h2><p>Arena 是堆内存管理中最大的数据结构, 分为 Main Arena 和 Thread Arena.<br>Arena 头部数据结构源码如下: </p>
 <figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">struct malloc_state</span><br><span class="line">&#123;</span><br><span class="line">  /* Serialize access.  */</span><br><span class="line">  mutex_t mutex;</span><br><span class="line"></span><br><span class="line">  /* Flags (formerly in max_fast).  */</span><br><span class="line">  int flags;</span><br><span class="line"></span><br><span class="line">  /* Fastbins */</span><br><span class="line">  mfastbinptr fastbinsY[NFASTBINS];</span><br><span class="line"></span><br><span class="line">  /* Base of the topmost chunk -- not otherwise kept in a bin */</span><br><span class="line">  mchunkptr top;</span><br><span class="line"></span><br><span class="line">  /* The remainder from the most recent split of a small request */</span><br><span class="line">  mchunkptr last_remainder;</span><br><span class="line"></span><br><span class="line">  /* Normal bins packed as described above */</span><br><span class="line">  mchunkptr bins[NBINS * 2 - 2];</span><br><span class="line"></span><br><span class="line">  /* Bitmap of bins */</span><br><span class="line">  unsigned int binmap[BINMAPSIZE];</span><br><span class="line"></span><br><span class="line">  /* Linked list */</span><br><span class="line">  struct malloc_state *next;</span><br><span class="line"></span><br><span class="line">  /* Linked list for free arenas.  */</span><br><span class="line">  struct malloc_state *next_free;       //原先被分配有 Thread 但是所有的 Thread 都被关闭的 Arena 会被放到这里</span><br><span class="line"></span><br><span class="line">  /* Memory allocated from the system in this arena.  */</span><br><span class="line">  INTERNAL_SIZE_T system_mem;           //Arena已分配内存大小</span><br><span class="line">  INTERNAL_SIZE_T max_system_mem;       //Arena可以被系统分配的最大内存大小</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
 
 <p>glibc会尽量为一个多线程程序的每个线程都分配1个 Arena, 但是 Arena 个数是有限的: 2倍CPU核数(32位环境) / 8倍CPU核数(64位环境). 当某线程申请使用内存但当前 Arena 个数已达最大值时, glibc首先遍历所有 Arena 并尝试获取它的 mutex, 若成功则该线程与 Arena 原线程共享该 Arena, 否则继续等待直到成功获取 mutex.  </p>
-<p><img src="glibcheap/arena.png" alt="arena"><br>Main Arena 与 Thread Arena 比较表:  </p>
+<p><img src="/2018/11/13/glibcheap/arena.png" alt="arena"><br>Main Arena 与 Thread Arena 比较表:  </p>
 <table>
 <thead>
 <tr>
